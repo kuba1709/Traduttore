@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <!-- Fa sì che la pagina si adatti allo schermo del telefono -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Traduttore</title>
+  <!-- Il "manifest" dice al telefono come installare la pagina come un'app -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#14161c">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <style>
+    /* ===== ASPETTO (CSS) ===== */
+    :root {
+      --bg: #14161c; --card: #1e212a; --text: #eef0f4; --muted: #8a90a0;
+      --accent: #4f8cff; --border: #2c303b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+      padding: max(16px, env(safe-area-inset-top)) 16px 24px;
+      display: flex; flex-direction: column; gap: 12px;
+    }
+    header { display: flex; align-items: center; justify-content: space-between; }
+    h1 { font-size: 20px; margin: 0; }
+    .lingue {
+      display: flex; align-items: center; justify-content: center; gap: 12px;
+      font-weight: 600; font-size: 16px;
+    }
+    .box {
+      background: var(--card); border: 1px solid var(--border); border-radius: 16px;
+      padding: 14px; display: flex; flex-direction: column; gap: 10px;
+    }
+    .etichetta { font-size: 13px; color: var(--muted); }
+    textarea {
+      width: 100%; min-height: 140px; resize: vertical; border: none; outline: none;
+      background: transparent; color: var(--text); font: inherit; font-size: 18px;
+    }
+    #risultato { min-height: 140px; font-size: 18px; white-space: pre-wrap; line-height: 1.4; }
+    #risultato.vuoto { color: var(--muted); }
+    .azioni { display: flex; gap: 8px; flex-wrap: wrap; }
+    button {
+      border: 1px solid var(--border); background: #262a35; color: var(--text);
+      border-radius: 999px; padding: 10px 16px; font: inherit; font-size: 15px;
+    }
+    button:active { transform: scale(0.97); }
+    button.primario { background: var(--accent); border-color: var(--accent); color: #fff; }
+    #inverti { font-size: 20px; padding: 6px 14px; }
+    #stato { font-size: 13px; color: var(--muted); min-height: 18px; text-align: center; }
+  </style>
+</head>
+<body>
+  <!-- ===== STRUTTURA (HTML) ===== -->
+  <header>
+    <h1>Traduttore</h1>
+  </header>
+
+  <div class="lingue">
+    <span id="lingua-da">Inglese</span>
+    <button id="inverti" aria-label="Inverti lingue">⇄</button>
+    <span id="lingua-a">Italiano</span>
+  </div>
+
+  <div class="box">
+    <span class="etichetta">Testo da tradurre</span>
+    <textarea id="testo" placeholder="Scrivi o incolla qui…"></textarea>
+    <div class="azioni">
+      <button id="incolla" class="primario">Incolla</button>
+      <button id="cancella">Cancella</button>
+    </div>
+  </div>
+
+  <div class="box">
+    <span class="etichetta">Traduzione</span>
+    <div id="risultato" class="vuoto">La traduzione apparirà qui.</div>
+    <div class="azioni">
+      <button id="copia">Copia</button>
+      <button id="ascolta">Ascolta</button>
+    </div>
+  </div>
+
+  <div id="stato"></div>
+
+  <script>
+    // ===== COMPORTAMENTO (JavaScript) =====
+
+    // 1. Prendiamo gli elementi della pagina con cui lavorare
+    const testo = document.getElementById('testo');
+    const risultato = document.getElementById('risultato');
+    const stato = document.getElementById('stato');
+    const linguaDa = document.getElementById('lingua-da');
+    const linguaA = document.getElementById('lingua-a');
+
+    // 2. Direzione della traduzione: "en" = inglese, "it" = italiano
+    let da = 'en', a = 'it';
+    const nomi = { en: 'Inglese', it: 'Italiano' };
+
+    // 3. La funzione che chiede la traduzione al servizio gratuito MyMemory.
+    //    Il servizio accetta al massimo ~500 caratteri per volta,
+    //    quindi i testi lunghi li spezziamo in frasi.
+    function spezza(t, max = 450) {
+      const frasi = t.match(/[^.!?\n]+[.!?\n]*/g) || [t];
+      const pezzi = [];
+      let corrente = '';
+      for (const f of frasi) {
+        if ((corrente + f).length > max && corrente) { pezzi.push(corrente); corrente = ''; }
+        corrente += f;
+      }
+      if (corrente) pezzi.push(corrente);
+      return pezzi;
+    }
+
+    async function traduciPezzo(pezzo) {
+      const url = 'https://api.mymemory.translated.net/get?q=' +
+        encodeURIComponent(pezzo) + '&langpair=' + da + '|' + a;
+      const risposta = await fetch(url);              // chiamata su internet
+      const dati = await risposta.json();             // leggiamo la risposta
+      if (dati.responseStatus !== 200 && dati.responseStatus !== '200') {
+        throw new Error(dati.responseDetails || 'Errore del servizio');
+      }
+      return dati.responseData.translatedText;
+    }
+
+    let ultimaRichiesta = 0;
+    async function traduci() {
+      const t = testo.value.trim();
+      if (!t) {
+        risultato.textContent = 'La traduzione apparirà qui.';
+        risultato.classList.add('vuoto');
+        stato.textContent = '';
+        return;
+      }
+      const numero = ++ultimaRichiesta;  // per ignorare risposte vecchie
+      stato.textContent = 'Traduco…';
+      try {
+        const pezzi = spezza(t);
+        const tradotti = await Promise.all(pezzi.map(traduciPezzo));
+        if (numero !== ultimaRichiesta) return;
+        risultato.textContent = tradotti.join(' ');
+        risultato.classList.remove('vuoto');
+        stato.textContent = '';
+      } catch (e) {
+        if (numero !== ultimaRichiesta) return;
+        stato.textContent = 'Errore: ' + e.message + ' (sei connesso a internet?)';
+      }
+    }
+
+    // 4. Traduzione "istantanea": partiamo 600 ms dopo che smetti di scrivere,
+    //    così non mandiamo una richiesta a ogni lettera.
+    let timer;
+    testo.addEventListener('input', () => {
+      clearTimeout(timer);
+      timer = setTimeout(traduci, 600);
+    });
+
+    // 5. I pulsanti
+    document.getElementById('incolla').onclick = async () => {
+      try {
+        testo.value = await navigator.clipboard.readText();
+        traduci();
+      } catch {
+        stato.textContent = 'Non posso leggere gli appunti: tieni premuto nel riquadro e scegli Incolla.';
+      }
+    };
+
+    document.getElementById('cancella').onclick = () => {
+      testo.value = '';
+      traduci();
+      testo.focus();
+    };
+
+    document.getElementById('copia').onclick = async () => {
+      if (risultato.classList.contains('vuoto')) return;
+      await navigator.clipboard.writeText(risultato.textContent);
+      stato.textContent = 'Copiato!';
+      setTimeout(() => (stato.textContent = ''), 1500);
+    };
+
+    document.getElementById('ascolta').onclick = () => {
+      if (risultato.classList.contains('vuoto')) return;
+      const voce = new SpeechSynthesisUtterance(risultato.textContent);
+      voce.lang = a === 'it' ? 'it-IT' : 'en-US';
+      speechSynthesis.speak(voce);
+    };
+
+    document.getElementById('inverti').onclick = () => {
+      [da, a] = [a, da];
+      linguaDa.textContent = nomi[da];
+      linguaA.textContent = nomi[a];
+      // la traduzione diventa il nuovo testo di partenza
+      if (!risultato.classList.contains('vuoto')) testo.value = risultato.textContent;
+      traduci();
+    };
+
+    // 6. Registriamo il "service worker": serve per rendere la pagina installabile come app
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js').catch(() => {});
+    }
+  </script>
+</body>
+</html>
